@@ -6,7 +6,7 @@ services:
       args:
         - CONTRIBSYS_CREDENTIALS
     depends_on:
-      - redis
+      - redis_sidekiq_workflow
       - sidekiq-workflows-test-worker
 
   sidekiq-workflows-test-worker:
@@ -16,7 +16,7 @@ services:
         - CONTRIBSYS_CREDENTIALS
     command: "bundle exec sidekiq -r ./test/sidekiq_workflows/processor.rb"
     depends_on:
-      - redis
+      - redis_sidekiq_workflow
 
-  redis:
-    image: redis:4-alpine
+  redis_sidekiq_workflow:
+    image: redis:6.2.7

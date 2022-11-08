@@ -8,17 +8,26 @@ module SidekiqWorkflows
 
     def perform(workflow)
       workflow = ensure_deserialized(workflow)
-
+      workflow_batch = batch || Sidekiq::Batch.new
       case workflow.class.name
       when 'SidekiqWorkflows::RootNode'
-        perform_children(batch, workflow)
+        perform_children(workflow_batch, workflow)
       when 'SidekiqWorkflows::WorkerNode'
-        batch.jobs do
+        workflow_batch.jobs do
           child_batch = Sidekiq::Batch.new
           child_batch.callback_queue = SidekiqWorkflows.callback_queue unless SidekiqWorkflows.callback_queue.nil?
           child_batch.description = "Workflow #{workflow.workflow_uuid || '-'}"
-          child_batch.on(:success, 'SidekiqWorkflows::Worker#on_success', workflow: workflow.serialize, workflow_uuid: workflow.workflow_uuid)
-          child_batch.on(:death, 'SidekiqWorkflows::Worker#on_death', workflow: workflow.serialize, workflow_uuid: workflow.workflow_uuid)
+
+          on_success_options = { workflow: workflow.serialize }
+          on_success_options.merge!(workflow_uuid: workflow.workflow_uuid)
+          on_success_options.merge!(current_attributes: workflow.current_attributes)
+          child_batch.on(:success, 'SidekiqWorkflows::Worker#on_success', on_success_options)
+
+          on_death_options = { workflow: workflow.serialize }
+          on_death_options.merge!(workflow_uuid: workflow.workflow_uuid)
+          on_death_options.merge!(current_attributes: workflow.current_attributes)
+          child_batch.on(:death, 'SidekiqWorkflows::Worker#on_death', on_death_options)
+
           child_batch.jobs do
             workflow.workers.each do |entry|
               if entry[:delay]
@@ -60,8 +69,14 @@ module SidekiqWorkflows
       batch = Sidekiq::Batch.new
       batch.callback_queue = SidekiqWorkflows.callback_queue unless SidekiqWorkflows.callback_queue.nil?
       batch.description = "Workflow #{workflow.workflow_uuid || '-'} root batch"
-      batch.on(:success, on_success, on_success_options.merge(workflow_uuid: workflow.workflow_uuid)) if on_success
-      batch.on(:death, on_death, on_death_options.merge(workflow_uuid: workflow.workflow_uuid)) if on_death
+
+      on_success_options.merge!(workflow_uuid: workflow.workflow_uuid)
+      on_success_options.merge!(current_attributes: workflow.current_attributes)
+      batch.on(:success, on_success, on_success_options) if on_success
+
+      on_death_options.merge!(workflow_uuid: workflow.workflow_uuid)
+      on_death_options.merge!(current_attributes: workflow.current_attributes)
+      batch.on(:death, on_death, on_death_options) if on_death
 
       yield batch if block_given?
 

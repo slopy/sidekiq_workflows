@@ -1,5 +1,6 @@
 require_relative '../test_helper'
 require 'active_support/time'
+require 'rspec/sidekiq/batch'
 
 describe SidekiqWorkflows::Node do
   class FooWorker
@@ -87,7 +88,7 @@ describe SidekiqWorkflows::Node do
     end
 
     it 'should build a tree with a group' do
-      workflow = SidekiqWorkflows.build do
+      workflow = SidekiqWorkflows.build(current_attributes: { key: 'value' }) do
         perform(FooWorker, 'foo').then do
           perform(BazWorker, 'baz')
         end
@@ -105,22 +106,28 @@ describe SidekiqWorkflows::Node do
       expect(workflow.children.length).must_equal 2
       expect(workflow.children[0].workers[0][:worker]).must_equal FooWorker
       expect(workflow.children[1].workers[0][:worker]).must_equal BadWorker
+      expect(workflow.children[1].current_attributes).must_equal({ key: 'value' })
 
       expect(workflow.children[0].children[0].workers[0][:worker]).must_equal BazWorker
       expect(workflow.children[1].children[0].workers[0][:worker]).must_equal FooWorker
       expect(workflow.children[1].children[0].workers[0][:payload]).must_equal ['badfoo']
+      expect(workflow.children[1].children[0].current_attributes).must_equal({ key: 'value' })
+
       expect(workflow.children[1].children[0].children[0].workers[0][:worker]).must_equal BazWorker
       expect(workflow.children[1].children[0].children[0].workers[0][:payload]).must_equal ['bazfoo']
       expect(workflow.children[1].children[0].children[0].workers[0][:delay]).must_equal(30)
       expect(workflow.children[1].children[0].children[0].workers[1][:worker]).must_equal BazWorker
       expect(workflow.children[1].children[0].children[0].workers[1][:payload]).must_equal ['baztwo']
       expect(workflow.children[1].children[0].children[0].workers[1][:delay]).must_be_nil
+      expect(workflow.children[1].children[0].children[0].current_attributes).must_equal({ key: 'value' })
     end
   end
 
   describe '(de-)serialization' do
     it 'can be serialized and deserialized' do
-      original = SidekiqWorkflows.build(workflow_uuid: workflow_uuid, on_partial_complete: on_partial_complete) do
+      original = SidekiqWorkflows.build(workflow_uuid: workflow_uuid, 
+                                        on_partial_complete: on_partial_complete,
+                                        current_attributes: { key: 'value' }) do
         perform(FooWorker, 'foo').then do
           perform(BazWorker, 'baz')
         end
@@ -149,6 +156,7 @@ describe SidekiqWorkflows::Node do
       expect(workflow.children[1].children[0].children[0].workers[0][:payload]).must_equal ['bazfoo']
 
       expect(workflow.all_nodes.map(&:workflow_uuid)).must_equal([workflow_uuid] * 6)
+      expect(workflow.all_nodes.map(&:current_attributes)).must_equal([{ key: 'value' }] * 6)
       expect(workflow.all_nodes.map(&:on_partial_complete)).must_equal([on_partial_complete] * 6)
     end
   end
@@ -161,9 +169,7 @@ describe SidekiqWorkflows::Node do
 
       FooWorker.expects(:perform_async).with('foo', 'bar')
 
-      Sidekiq::Testing.inline! do
-        SidekiqWorkflows::Worker.perform_workflow(workflow)
-      end
+      SidekiqWorkflows::Worker.perform_workflow(workflow)
     end
 
     it 'should perform async the given workers' do
@@ -173,10 +179,7 @@ describe SidekiqWorkflows::Node do
 
       FooWorker.expects(:perform_async).with('foo', 'bar')
       BazWorker.expects(:perform_async).with('bar', 'foo')
-
-      Sidekiq::Testing.inline! do
-        SidekiqWorkflows::Worker.perform_workflow(workflow)
-      end
+      SidekiqWorkflows::Worker.perform_workflow(workflow)
     end
   end
 end
